@@ -1,0 +1,348 @@
+#!/bin/bash 
+# Get configurations
+SOURCE_CONFIG="`pwd`/run_sim.config"
+source $SOURCE_CONFIG
+
+################################
+# Execute RTL Simulation function
+################################
+function execute_sim_rtl {
+    export ARCH_PATH=$1
+    export CURRENT_DATASET=$2
+
+    # Create working dir
+    cd ${SIMULATION_ROOT}
+    export CURRENT_SIM_FOLDER="RTL_${DESIGN_NAME}_${CURRENT_DATASET}"
+    mkdir -p "${CURRENT_SIM_FOLDER}"
+    cd "${CURRENT_SIM_FOLDER}"
+  
+    # Remove previous version of TCL file
+    rm -rf ${DESIGN_NAME}.tcl
+
+    # Active TCF dump
+    if [ $DUMP_TCF = true ]; then
+        echo -e "dumptcf -internal -output ${TCF_ROOT}/${CURRENT_SIM_FOLDER}.tcf -scope ${TESTBENCH_TOP}.${TESTBENCH_INST} -overwrite -verbose -flatformat -dumpwireasnet" > ${DESIGN_NAME}.tcl
+    fi
+    
+    # Enable or not the VCD dumping
+    if [ $NO_VCD = false ]; then
+        echo -e "database -open sim_vcd -into ${VCD_ROOT}/${CURRENT_SIM_FOLDER}.vcd -default -vcd -timescale ps" >> ${DESIGN_NAME}.tcl
+        echo -e "probe -create -vcd -depth all -inputs -outputs -ports" >> ${DESIGN_NAME}.tcl
+    fi
+    
+
+    # Run simulation
+    echo -e "run" >> ${DESIGN_NAME}.tcl
+    if [ $DUMP_TCF = true ]; then
+        echo -e "dumptcf -end" >> ${DESIGN_NAME}.tcl
+    fi
+    echo -e "exit" >> ${DESIGN_NAME}.tcl
+
+
+    if [ $DEBUG_MODE = false ]; then
+
+    /bin/bash -c 'source /lab215/scripts/set_cadence.bash; \
+        irun -access +rwc \
+        -l ${DESIGN_NAME}.log -input ${DESIGN_NAME}.tcl -timescale 1ns/1ps -top work.${TESTBENCH_TOP}:${BENCH_FILE_EXT} -defparam ${TESTBENCH_TOP}.PERIOD=60 \
+        -defparam ${TESTBENCH_TOP}.INPUT_PATH=\"${STIMULI_ROOT}/${CURRENT_DATASET}\" \
+        -v200x -verbose -work work \
+        ${ARCH_PATH} ${BENCH_ROOT}/tb_decision.v'
+
+    else
+
+    /bin/bash -c 'source /lab215/scripts/set_cadence.bash; \
+        irun -access +rwc \
+        -l ${DESIGN_NAME}.log -input ${DESIGN_NAME}.tcl -timescale 1ns/1ps -top work.${TESTBENCH_TOP}:${BENCH_FILE_EXT} -defparam ${TESTBENCH_TOP}.PERIOD=60 \
+        -defparam ${TESTBENCH_TOP}.INPUT_PATH=\"${STIMULI_DEBUG_ROOT}/${CURRENT_DATASET}\" \
+        -v200x -verbose -work work \
+        ${ARCH_PATH} ${BENCH_ROOT}/tb_decision.v'
+
+    fi
+
+    if [ $DUMP_TCF = true ]; then
+        /bin/bash -c 'find ${TCF_ROOT} -name "${CURRENT_SIM_FOLDER}.tcf" -exec sed -i "s/${TESTBENCH_TOP}\/${TESTBENCH_INST}\///g" {} +;'
+    fi
+}
+
+################################
+# Execute Post-synth Simulation function
+################################
+function execute_sim_netlist {
+    export ARCH_PATH=$1
+    export CURRENT_DATASET=$2
+    export CLK_PER=`basename $ARCH_PATH | egrep -o "PERIOD_[0-9.]+$" | sed "s/PERIOD_//g"`
+    
+    # Create working dir
+    cd ${SIMULATION_ROOT}
+    CURRENT_SIM_FOLDER="SIM_${DESIGN_NAME}_${CLK_PER}_${CURRENT_DATASET}"
+    mkdir -p "${CURRENT_SIM_FOLDER}"
+    cd "${CURRENT_SIM_FOLDER}"
+    
+    # Remove previous version of TCL file
+    rm -rf ${DESIGN_NAME}.tcl
+
+    # Active TCF dump
+    if [ $DUMP_TCF = true ]; then
+        echo -e "dumptcf -internal -output ${TCF_ROOT}/${CURRENT_SIM_FOLDER}.tcf -scope ${TESTBENCH_TOP}.${TESTBENCH_INST} -overwrite -verbose -flatformat -dumpwireasnet" > ${DESIGN_NAME}.tcl
+    fi
+  
+    # Enable or not the VCD dumping
+    if [ $NO_VCD = false ]; then
+        echo -e "database -open sim_vcd -into ${VCD_ROOT}/${CURRENT_SIM_FOLDER}.vcd -default -vcd -timescale ps" >> ${DESIGN_NAME}.tcl
+        echo -e "probe -create -vcd -depth all -inputs -outputs -ports" >> ${DESIGN_NAME}.tcl
+    fi
+
+    echo ${CLK_PER}
+    # Run simulation
+    echo -e "run" >> ${DESIGN_NAME}.tcl
+    if [ $DUMP_TCF = true ]; then
+        echo -e "dumptcf -end" >> ${DESIGN_NAME}.tcl
+    fi
+    echo -e "exit" >> ${DESIGN_NAME}.tcl
+    
+    if [ "$ENABLE_MULTI_VT" = false ]; then 
+        export VERILOG_PRIMITIVES="/lab215/pdk/st/cmos065_421/CORE65LPSVT_SNPS-AVT-CDS_4.1/behaviour/verilog/CORE65LPSVT.v \
+            /lab215/pdk/st/cmos065_421/CLOCK65LPSVT_SNPS-AVT-CDS_2.1/behaviour/verilog/CLOCK65LPSVT.v"
+	#export VERILOG_PRIMITIVES="/lab215/workareas/babreu/NanGate15nm.v"
+    else
+        export VERILOG_PRIMITIVES="/lab215/pdk/st/cmos065_421/CORE65LPSVT_SNPS-AVT-CDS_4.1/behaviour/verilog/CORE65LPSVT.v \
+            /lab215/pdk/st/cmos065_421/CORE65LPHVT_SNPS-AVT-CDS_4.1/behaviour/verilog/CORE65LPHVT.v \
+            /lab215/pdk/st/cmos065_421/CORE65LPLVT_SNPS-AVT-CDS_4.1/behaviour/verilog/CORE65LPLVT.v \
+            /lab215/pdk/st/cmos065_421/CLOCK65LPSVT_SNPS-AVT-CDS_2.1/behaviour/verilog/CLOCK65LPSVT.v \
+            /lab215/pdk/st/cmos065_421/CLOCK65LPHVT_SNPS-AVT-CDS_2.1/behaviour/verilog/CLOCK65LPHVT.v \
+            /lab215/pdk/st/cmos065_421/CLOCK65LPLVT_SNPS-AVT-CDS_2.1/behaviour/verilog/CLOCK65LPLVT.v"
+    fi
+
+    if [ $DEBUG_MODE = false ]; then
+
+    /bin/bash -c 'source /lab215/scripts/set_cadence.bash; \
+        irun -access +rwc -smartorder \
+        -l ${DESIGN_NAME}.log -input ${DESIGN_NAME}.tcl -timescale 1ns/1ps \
+        -top work.${TESTBENCH_TOP}:${BENCH_FILE_EXT} \
+        -sdf_cmd_file ${ARCH_PATH}/outputs/sdf_cmd_file \
+        -defparam ${TESTBENCH_TOP}.PERIOD=${CLK_PER} \
+        -defparam ${TESTBENCH_TOP}.INPUT_PATH=\"${STIMULI_ROOT}/${CURRENT_DATASET}\" \
+        -v200x -verbose -work work \
+        ${VERILOG_PRIMITIVES} \
+        ${ARCH_PATH}/outputs/${DESIGN_NAME}.v ${BENCH_ROOT}/tb_decision.v'
+
+    else
+
+    /bin/bash -c 'source /lab215/scripts/set_cadence.bash; \
+        irun -access +rwc -smartorder \
+        -l ${DESIGN_NAME}.log -input ${DESIGN_NAME}.tcl -timescale 1ns/1ps \
+        -top work.${TESTBENCH_TOP}:${BENCH_FILE_EXT} \
+        -sdf_cmd_file ${ARCH_PATH}/outputs/sdf_cmd_file \
+        -defparam ${TESTBENCH_TOP}.PERIOD=${CLK_PER} \
+        -defparam ${TESTBENCH_TOP}.INPUT_PATH=\"${STIMULI_DEBUG_ROOT}/${CURRENT_DATASET}\" \
+        -v200x -verbose -work work \
+        ${VERILOG_PRIMITIVES} \
+        ${ARCH_PATH}/outputs/${DESIGN_NAME}.v ${BENCH_ROOT}/tb_decision.v'
+
+    fi
+
+
+    if [ $DUMP_TCF = true ]; then
+        /bin/bash -c 'find ${TCF_ROOT} -name "${CURRENT_SIM_FOLDER}.tcf" -exec sed -i "s/${TESTBENCH_TOP}\/${TESTBENCH_INST}\///g" {} +;'
+    fi
+}
+
+function execute_sim_netlist_nodelay {
+    export ARCH_PATH=$1
+    export CURRENT_DATASET=$2
+    export CLK_PER=`basename $ARCH_PATH | egrep -o "PERIOD_[0-9.]+" | sed "s/PERIOD_//g"`
+
+    # Create working dir
+    cd ${SIMULATION_ROOT}
+    CURRENT_SIM_FOLDER="SIM_${DESIGN_NAME}_${CLK_PER}_${CURRENT_DATASET}"
+    mkdir -p "${CURRENT_SIM_FOLDER}"
+    cd "${CURRENT_SIM_FOLDER}"
+  
+    # Remove previous version of TCL file
+    rm -rf ${DESIGN_NAME}.tcl
+
+    # Active TCF dump
+    if [ $DUMP_TCF = true ]; then
+        echo -e "dumptcf -internal -output ${TCF_ROOT}/${CURRENT_SIM_FOLDER}.tcf -scope ${TESTBENCH_TOP}.${TESTBENCH_INST} -overwrite -verbose -flatformat -dumpwireasnet" > ${DESIGN_NAME}.tcl
+    fi
+  
+    # Enable or not the VCD dumping
+    if [ $NO_VCD = false ]; then
+        echo -e "database -open sim_vcd -into ${VCD_ROOT}/${CURRENT_SIM_FOLDER}.vcd -default -vcd -timescale ps" >> ${DESIGN_NAME}.tcl
+        echo -e "probe -create -vcd -depth all -inputs -outputs -ports" >> ${DESIGN_NAME}.tcl
+    fi
+    
+    # Run simulation
+    echo -e "run" >> ${DESIGN_NAME}.tcl
+    if [ $DUMP_TCF = true ]; then
+        echo -e "dumptcf -end" >> ${DESIGN_NAME}.tcl
+    fi
+    echo -e "exit" >> ${DESIGN_NAME}.tcl
+
+    if [ $ENABLE_MULTI_VT = false ]; then 
+	export VERILOG_PRIMITIVES="/lab215/pdk/st/cmos065_421/CORE65LPSVT_SNPS-AVT-CDS_4.1/behaviour/verilog/CORE65LPSVT.v \
+            /lab215/pdk/st/cmos065_421/CLOCK65LPSVT_SNPS-AVT-CDS_2.1/behaviour/verilog/CLOCK65LPSVT.v"
+
+        #export VERILOG_PRIMITIVES="/lab215/workareas/babreu/NanGate15nm.v"
+    else
+        export VERILOG_PRIMITIVES="/lab215/pdk/st/cmos065_421/CORE65LPSVT_SNPS-AVT-CDS_4.1/behaviour/verilog/CORE65LPSVT.v \
+            /lab215/pdk/st/cmos065_421/CORE65LPHVT_SNPS-AVT-CDS_4.1/behaviour/verilog/CORE65LPHVT.v \
+            /lab215/pdk/st/cmos065_421/CORE65LPLVT_SNPS-AVT-CDS_4.1/behaviour/verilog/CORE65LPLVT.v \
+            /lab215/pdk/st/cmos065_421/CLOCK65LPSVT_SNPS-AVT-CDS_2.1/behaviour/verilog/CLOCK65LPSVT.v \
+            /lab215/pdk/st/cmos065_421/CLOCK65LPHVT_SNPS-AVT-CDS_2.1/behaviour/verilog/CLOCK65LPHVT.v \
+            /lab215/pdk/st/cmos065_421/CLOCK65LPLVT_SNPS-AVT-CDS_2.1/behaviour/verilog/CLOCK65LPLVT.v"
+    fi
+
+    if [ $DEBUG_MODE = true ]; then
+
+    /bin/bash -c 'source /lab215/scripts/set_cadence.bash; \
+        irun -access +rwc -smartorder \
+        -l ${DESIGN_NAME}.log -input ${DESIGN_NAME}.tcl -timescale 1ns/1ps \
+        -top work.${TESTBENCH_TOP}:${BENCH_FILE_EXT} \
+        -defparam ${TESTBENCH_TOP}.PERIOD=${CLK_PER} \
+        -defparam ${TESTBENCH_TOP}.INPUT_PATH=\"${STIMULI_DEBUG_ROOT}/${CURRENT_DATASET}\" \
+        -v200x -verbose -work work \
+        ${VERILOG_PRIMITIVES} \
+        ${ARCH_PATH}/outputs/${DESIGN_NAME}.v ${BENCH_ROOT}/tb_decision.v'
+
+    else
+    /bin/bash -c 'source /lab215/scripts/set_cadence.bash; \
+        irun -access +rwc -smartorder \
+        -l ${DESIGN_NAME}.log -input ${DESIGN_NAME}.tcl -timescale 1ns/1ps \
+        -top work.${TESTBENCH_TOP}:${BENCH_FILE_EXT} \
+        -defparam ${TESTBENCH_TOP}.PERIOD=${CLK_PER} \
+        -defparam ${TESTBENCH_TOP}.INPUT_PATH=\"${STIMULI_ROOT}/${CURRENT_DATASET}\" \
+        -v200x -verbose -work work \
+        ${VERILOG_PRIMITIVES} \
+        ${ARCH_PATH}/outputs/${DESIGN_NAME}.v ${BENCH_ROOT}/tb_decision.v'
+
+    fi
+
+
+    if [ $DUMP_TCF = true ]; then
+        /bin/bash -c 'find ${TCF_ROOT} -name "${CURRENT_SIM_FOLDER}.tcf" -exec sed -i "s/${TESTBENCH_TOP}\/${TESTBENCH_INST}\///g" {} +;'
+    fi
+
+}
+
+################################
+# Help message function
+################################
+usage() {
+    echo -e "Usage: `basename $0` [OPTIONS]" 1>&2
+    echo -e "\nGlobal options:"
+    echo -e "\t -j, --jobs VALUE: maximum processes in parallel"
+    echo -e "\t -d, --debug:      debug mode, stop on error"
+    echo -e "\t -h, --help:       shows this message"
+    echo -e "Simulation options:"
+    echo -e "\t -a, --all:                all architectures will be simulated"
+    echo -e "\t -A, --architecture ARCH:  specify the architecture to be simulated"
+    echo -e "\t -p, --clock-period CLK:   set the clock period for RTL simulation (default: 10 ns)"
+    echo -e "\t -s, --post-synth:         use post-synthesis netlist for simulation"
+    echo -e "\t -n, --no-delay:           do not use SDF file (post-synth)"
+    echo -e "\t -t, --dump-tcf:           dump TCF file (default: no)"
+    echo -e "\t -v, --no-vcd:             do not dump VCD file"
+    echo -e "\t -l, --dataset-list:         inform dataset list to be used as input"
+    echo -e "\t -g, --gui:                open simulator GUI"
+    echo -e "Cleanup options:"
+    echo -e "\t -c, --clean:              clean everything"
+}
+
+export -f execute_sim_rtl
+export -f execute_sim_netlist
+export -f execute_sim_netlist_nodelay
+
+################################
+# Parse arguments
+################################
+# Get arguments
+inputOptions=$(getopt -o "${ShortOpts}" --long "${LongOpts}" \
+    --name "${ScriptName}" -- "${@}")
+
+if [[ ($? -ne 0) || ($# -eq 0) ]]; then
+    usage
+    exit $E_OPTERR
+fi
+
+# Process arguments
+eval set -- "${inputOptions}"
+
+while true; do
+    case "${1}" in
+        -h|--help)
+            usage
+            exit 0;;
+        -c|--clean)
+            CLEAN_ALL=true;;
+        -d|--debug)
+            export DEBUG_MODE=true;;
+        -a|--all)
+            ALL_ARCHS=true;;
+        -n|--no-delay)
+            NO_DELAY=true;;
+        -A|--architecture)
+            ARCH_NAMES+="$2 "
+            shift;;
+        -j|--jobs)
+            MAX_PROCS=$2
+            shift;;
+        -t|--dump-tcf)
+            export DUMP_TCF=true;;
+        -v|--no-vcd)
+            export NO_VCD=true;;
+        -p|--clock-period)
+            export CLK_PER=$2
+            shift;;
+        -l|--dataset-list)
+            DS_LIST+="$2 "
+            shift;;
+        -s|--post-synth)
+            USE_NETLIST=true;;
+        -g|--gui)
+            USE_GUI=true;;
+        --)
+            shift
+            break;;
+        *)
+            echo -e "Invalid parameter!"
+            usage
+            exit -2;;
+    esac
+    shift
+done
+# Goes to the next argument
+shift $((OPTIND-1))
+
+RTL_EXISTS=`find ${RTL_ROOT} -maxdepth 1 -type f -name "*" | wc -l`
+SYNTH_EXISTS=`find ${SYNTH_ROOT} -maxdepth 1 -type d -name "*" | wc -l`
+
+
+if [ $USE_NETLIST = false ]; then
+	ARCH_PATH="`find ${RTL_ROOT} -mindepth 1 -maxdepth 1 -name \"*\"` "
+else
+	ARCH_PATH=`find ${SYNTH_ROOT} -mindepth 1 -maxdepth 1`
+fi
+
+mkdir -p $SIMULATION_ROOT
+if [ $DUMP_TCF = true ]; then
+    mkdir -p ${SIMULATION_ROOT}/tcf
+fi
+if [ $NO_VCD = false ]; then
+    mkdir -p $SIMULATION_ROOT/vcd
+fi
+
+DATASET=$DS_LIST
+    
+COMMAND_LIST="$ARCH_PATH $DATASET|"
+
+if [ $USE_GUI = false ]; then
+    if [ $USE_NETLIST = true ] && [ $NO_DELAY = false ]; then
+        echo $COMMAND_LIST | sed -r 's/\|/\n/g' | xargs --max-args=1 -I{} --max-procs=${MAX_PROCS} /bin/bash -c "execute_sim_netlist {}"
+    elif [ $USE_NETLIST = true ] && [ $NO_DELAY = true ]; then
+        echo $COMMAND_LIST | sed -r 's/\|/\n/g' | xargs --max-args=1 -I{} --max-procs=${MAX_PROCS} /bin/bash -c "execute_sim_netlist_nodelay {}"
+    else
+        echo $COMMAND_LIST | sed -r 's/\|/\n/g' | xargs --max-args=1 -I{} --max-procs=${MAX_PROCS} /bin/bash -c "execute_sim_rtl {}"
+    fi
+else
+    echo "Not implemented yet"
+fi

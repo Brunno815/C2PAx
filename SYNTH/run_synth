@@ -1,0 +1,149 @@
+#!/bin/bash 
+# Get configs
+SOURCE_CONFIG="`pwd`/run_synth.config"
+source $SOURCE_CONFIG
+
+# Execute synthesis function
+function execute_synth {
+    export SYNTH_CLK_PERIOD=$1
+ 
+    echo -e "Current clock period constraint: ${SYNTH_CLK_PERIOD} ns"
+    echo -e "\nStarting synthesis...\n\n"
+
+    dest_synth_dir="synthesis_${DESIGN_NAME}_PERIOD_${SYNTH_CLK_PERIOD}"
+
+    cd $SYNTH_ROOT
+    mkdir -p $dest_synth_dir && cd $dest_synth_dir
+    
+    if [ $RESYNTHETIZE == false ]; then
+        export CURRENT_HDL_FOLDER="${RTL_ROOT}"
+    else
+        export CURRENT_HDL_FILE="${SYNTH_ROOT}/${dest_synth_dir}/outputs/${DESIGN_NAME}.v"
+    fi
+
+    export BASE_SIM_FILENAME="SIM_${DESIGN_NAME}_${SYNTH_CLK_PERIOD}"
+
+    /bin/bash -c "source /lab215/scripts/set_cadence.bash; genus -legacy_ui -file ${TCL_ROOT}/template_lp.tcl"
+    
+    # check if the synthesis finished
+    synth_finished=`find . -name reports | wc -l`
+    if [ $synth_finished -le 0 ]; then
+        echo -e "Error in synthesis, stopping..."
+        exit 1
+    fi
+   
+    if [ $RESYNTHETIZE == false ]; then
+        /bin/bash -c "source /lab215/scripts/set_cadence.bash; cd outputs; ncsdfc ${DESIGN_NAME}.sdf"
+        # Create the SDF command file
+        echo -e "COMPILED_SDF_FILE = \"${SYNTH_ROOT}/${dest_synth_dir}/outputs/${DESIGN_NAME}.sdf.X\"," > outputs/sdf_cmd_file
+        echo -e "LOG_FILE = \"sdf.log\"," >> outputs/sdf_cmd_file
+        echo -e "SCOPE = ${TESTBENCH_TOP}:${TESTBENCH_INST}," >> outputs/sdf_cmd_file
+        echo -e "MTM_CONTROL = \"MAXIMUM\"," >> outputs/sdf_cmd_file
+        echo -e "SCALE_FACTORS = \"1.0:1.0:1.0\"," >> outputs/sdf_cmd_file
+        echo -e "SCALE_TYPE = \"FROM_MAXIMUM\";" >> outputs/sdf_cmd_file
+
+
+    fi
+}
+
+################################
+# Help message function
+################################
+usage() {
+    echo -e "Usage: `basename $0` [OPTIONS]" 1>&2
+    echo -e "\nGlobal options:"
+    echo -e "\t -j, --jobs VALUE: maximum processes in parallel"
+    echo -e "\t -h, --help:       shows this message"
+    echo -e "\t -d, --debug:      enables debugging (stop on error)"
+    echo -e "Synthesis options:"
+    echo -e "\t -a, --all:                all architectures will be synthetized"
+    echo -e "\t -A, --architecture ARCH:  specify the architecture to be synthetized"
+    echo -e "\t -m, --multi-clk:          synthetize for a list of clock periods"
+    echo -e "\t -f, --clocks-file:        specify the clock period constraint file [default: synth_clk.list]"
+    echo -e "\t -p, --clock-period VALUE: clock period constraint for synthesis"
+    echo -e "\t -x, --skip-synthesis:     skip synthesis if architecture is already synthetized (should be disable for VCD power estimation)"
+    echo -e "\t -e, --disable-adders:     disable library HAs and FAs"
+    echo -e "\t -v, --multi-vt:           enable Multi-VT optimization"
+    echo -e "\t -t, --vdd VALUE:          set the operating VDD value"
+    echo -e "\t -g, --clock-gating:       activate clock gating support"
+    echo -e "\t -s, --synthinresynth:     do synthesis again when resynthesizing"
+    echo -e "\t -r, --resynthesize        resynthesize the design from a netlist to speed the power estimation flow"
+    echo -e "Cleanup options:"
+    echo -e "\t -c, --clean:              clean everything"
+}
+
+export -f execute_synth
+
+################################
+# Parse arguments
+################################
+# Get arguments
+inputOptions=$(getopt -o "${ShortOpts}" --long "${LongOpts}" \
+    --name "${ScriptName}" -- "${@}")
+
+if [[ ($? -ne 0) || ($# -eq 0) ]]; then
+    usage
+    exit $E_OPTERR
+fi
+
+# Process arguments
+eval set -- "${inputOptions}"
+
+while true; do
+    case "${1}" in
+        -h|--help)
+            usage
+            exit 0;;
+        -d|--debug)
+            $DEBUG_MODE=true;;
+        -c|--clean)
+            CLEAN_ALL=true;;
+        -a|--all)
+            ALL_ARCHS=true;;
+        -A|--architecture)
+            ARCH_NAMES+="$2 "
+            shift;;
+        -j|--jobs)
+            MAX_PROCS=$2
+            shift;;
+        -p|--clock-period)
+            CLK_PARAM=$2
+            shift;;
+        -m|--multi-clk)
+            MULTI_CLK=true;;
+        -r|--resynthetize)
+            export RESYNTHETIZE=true;;
+	-s|--synthinresynth)
+	    export SYNTH_IN_RESYNTH=true;;
+        -f|--clocks-file)
+            SYNTH_CLK_FILE_PATH=$2
+            shift;;
+        -x|--skip-synthesis)
+            export SKIP_SYNTH_IF_PRESENT=true;;
+        -e|--disable-adders)
+            export ENABLE_HA_FA=false;;
+        -v|--multi-vt)
+            export ENABLE_MULTI_VT=true;;
+        -t|--vdd)
+            export SYNTH_VDD=$2
+            shift;;
+        -g|--clock-gating)
+            export ENABLE_CLOCK_GATING=true;;
+        --)
+            shift
+            break;;
+        *)
+            echo -e "Invalid parameter!"
+            usage
+            exit -2;;
+    esac
+    shift
+done
+# Goes to the next argument
+shift $((OPTIND-1))
+
+RTL_EXISTS=`find ${RTL_ROOT} -maxdepth 1 -type f -name "*" | wc -l`
+COMMAND_LIST+="$CLK_PARAM|"
+
+#Execute synth
+echo $COMMAND_LIST | sed -r 's/\|/\n/g' | xargs --max-args=1 -L 1 -I{} --max-procs=${MAX_PROCS} /bin/bash -c 'execute_synth {}'
