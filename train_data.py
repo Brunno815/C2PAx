@@ -269,6 +269,449 @@ def getSimplifiedExpression(tree, c, comparisons, ors):
 	return simplExpr, isUsedInExpr
 
 
+def treeToHdl(clf, dataset, classifier, maxDepth, featureSizes, fHandler, fHandlerTb, fHandlerTbDebug, numTrees, bitsPrecision, updateCteMode, totalSamples, compsClassif = [], listBestComps = [], maxStep = 0, maxStepPercent = 0, nrBitsDC = 0, areaThr = 0):
+
+	nrOut = outs[dataset]
+
+	##### CREATE OUTPUTS VECTOR WITH ONE OUTPUT (ONE BIT OF DECISION TREE, FIXED) #####
+	outputs = []
+	output = {}
+	output['name'] = 'decision'
+	output['size'] = 1 if (nrOut == 2 and classifier == 'tree') else nrOut
+	output['type'] = 'STD_LOGIC' if (nrOut == 2 and classifier == 'tree') else 'STD_LOGIC_VECTOR'
+
+	outputs.append(output)
+	###################################################################################
+
+	comparisons = {}
+	ors = {}
+	comparison = None
+	_or = None
+	c = {}
+
+	for i in range(numTrees):
+		comparisons[i] = []
+		ors[i] = []
+		for specOut in range(nrOut):
+			if classifier == 'tree':
+				comparison, _or = getAllComparisonsOrs(clf, featureSizes, specOut)
+			elif classifier == 'forest':
+				comparison, _or = getAllComparisonsOrs(clf[i], featureSizes, specOut)
+
+			ors[i].append(_or)			
+
+		comparisons[i] = comparison
+
+
+	globalComparisons = []
+	for i in range(numTrees):
+		for comparison in comparisons[i]:
+			if comparison[:3] not in [x[:3] for x in globalComparisons]:
+				globalComparisons += [comparison]
+			else:
+				for idx,comp in enumerate(globalComparisons):
+					if comp[:3] == comparison[:3]:
+						if globalComparisons[idx][3] >= comparison[3]:
+							globalComparisons[idx][3] = comparison[3]
+						if globalComparisons[idx][4] >= comparison[4]:
+							globalComparisons[idx][4] = comparison[4]
+
+						break
+
+
+
+	algebra = boolean.BooleanAlgebra()
+
+	c = [0]*numTrees
+	expressions = {}
+	isUsedInExprs = {}
+	isUsedInExprsPerTree = {}
+	strExprs = {}
+
+	for i in range(numTrees):
+
+		expressions[i] = []
+		isUsedInExprs[i] = []
+		isUsedInExprsPerTree[i] = [0]*len(globalComparisons)
+		strExprs[i] = []
+
+		for specOut in range(nrOut):
+			c[i] = [0]*len(globalComparisons)
+			for idx in range(len(globalComparisons)):
+				c[i][idx] = algebra.symbols("c%d" % (idx))
+			##### AQUI, A VARIAVEL C VAI TER TODAS COMPARACOES CONSIDERANDO O SIMBOLO DA BIBLIOTECA BOOLEAN (NAO EH IGUAL O NUMERO DE FEATURES PORQUE ALGUMAS FEATURES SAO COMPARADAS MAIS DE UMA VEZ NA ARVORE, OU NEM SAO USADAS)
+
+			expression = []
+			isUsedInExpr = []
+
+			if classifier == 'tree':
+				expression, isUsedInExpr = getSimplifiedExpression(clf, c[i], globalComparisons, ors[i][specOut])
+			elif classifier == 'forest':
+				expression, isUsedInExpr = getSimplifiedExpression(clf[i], c[i], globalComparisons, ors[i][specOut])
+
+			expressions[i].append(expression)
+			isUsedInExprs[i].append(isUsedInExpr)
+			isUsedInExprsPerTree[i] = [(x or y) for x,y in zip(isUsedInExprsPerTree[i], isUsedInExpr)]
+			strExprs[i].append(str(expression))
+
+	isUsedInExprsGlobal = [0]*len(isUsedInExprsPerTree[0])
+
+	for key in isUsedInExprsPerTree.keys():
+		for idx, elem in enumerate(isUsedInExprsPerTree[key]):
+			isUsedInExprsGlobal[idx] = elem or isUsedInExprsGlobal[idx]
+
+	##### CREATE INPUTS VECTOR WHOSE INPUTS ARE THE FEATURES USED IN THE TREE #####
+
+	inputs = []
+	existingInputs = []
+
+	for i in range(numTrees):
+		for idx, comparison in enumerate(globalComparisons):
+			if comparison[0] not in existingInputs and isUsedInExprsGlobal[idx] == 1:
+				existingInputs.append(comparison[0])
+				_input = {}
+				_input['name'] = comparison[0]
+				_input['type'] = 'STD_LOGIC' if comparison[2] == 1 else 'STD_LOGIC_VECTOR'
+				_input['size'] = comparison[2]
+				inputs.append(_input)
+
+
+	_input = {}
+	_input['name'] = "CLK"
+	_input['type'] = "STD_LOGIC"
+	_input['size'] = 1
+	inputs.append(deepcopy(_input))
+
+	_input['name'] = "RST"
+	_input['type'] = "STD_LOGIC"
+	_input['size'] = 1
+	inputs.append(deepcopy(_input))
+	###############################################################################
+
+	##### WRITE THE LIBRARY NAMES AND THE ENTITY, WITH INPUTS AND OUTPUTS #####
+	verilog.gen_libraries(fHandler)
+	verilog.gen_entity(fHandler, nameEntity, inputs, outputs)
+	###########################################################################
+
+	##### GET COMPARATORS AND SIGNALS #####
+
+	signals = []
+	comparators = []
+	existingComparisons = []
+
+	for _input in inputs:
+		signal = {}
+		signal["name"] = "reg_%s" % (_input["name"])
+		signal["size"] = _input["size"]
+		signal["type"] = _input["type"]
+		signals.append(deepcopy(signal))
+
+	signal = {}
+	signal["name"] = "reg_%s" % (outputs[0]["name"])
+	signal["size"] = outputs[0]["size"]
+	signal["type"] = outputs[0]["type"]
+	signals.append(deepcopy(signal))
+
+
+	# CHANGE THE CONSTANTS
+	if updateCteMode == 0:
+		if maxStep > -1:
+			for idx, comparison in enumerate(globalComparisons):
+				if comparison[2] != bitsPrecision:
+					continue
+
+				newMaxStep = maxStep
+
+				prevCte = int(comparison[1])
+				areaCurrCte = compsClassif[prevCte]
+				currBestCte = prevCte
+
+				for step in range(1,newMaxStep+1):
+					candCte = prevCte - step
+
+					if (candCte >= 0) and (candCte < len(compsClassif)):
+						areaCand = compsClassif[candCte]
+					
+
+						if areaCand < areaCurrCte:
+							currBestCte = candCte
+							areaCurrCte = areaCand
+
+					candCte = prevCte + step
+
+					if (candCte >= 0) and (candCte < len(compsClassif)):
+						areaCand = compsClassif[candCte]
+
+
+						if areaCand < areaCurrCte:
+							currBestCte = candCte
+							areaCurrCte = areaCand
+
+				globalComparisons[idx] = [comparison[0], float(currBestCte), comparison[2]]
+
+
+	for i in range(numTrees):
+		for idx, comparison in enumerate(globalComparisons):
+			filteredComparison = "_".join([comparison[0], str(int(comparison[1])).replace(".","_")])
+
+			if isUsedInExprsGlobal[idx] == 1 and filteredComparison not in existingComparisons:
+
+				existingComparisons.append(filteredComparison)
+
+				signal = {}
+				signal["name"] = "comp_%s" % (filteredComparison)
+				signal["size"] = 1
+				signal["type"] = "STD_LOGIC"
+				signals.append(deepcopy(signal))
+
+				if "const_%s_%s" % (str(int(comparison[1])).replace(".","_"), str(comparison[2])) not in [existingSignal["name"].replace(".","_") for existingSignal in signals]:
+					signal = {}
+					signal["name"] = "const_%s_%s" % (str(int(comparison[1])).replace(".","_"), str(comparison[2]))
+
+					for _input in inputs:
+						if _input['name'] == comparison[0]:
+							signal['type'] = _input["type"]
+							signal["size"] = _input["size"]
+
+							if updateCteMode == 3:
+								if signal["size"] == bitsPrecision:
+									signal["const_value"] = "%s%s" % (('{0:0%sb}' % (signal["size"])).format(int(comparison[1])).replace("-","")[:-nrBitsDC], "x"*nrBitsDC)
+								else:
+									signal["const_value"] = "%s" % (('{0:0%sb}' % (signal["size"])).format(int(comparison[1])).replace("-",""))
+							else:
+								signal["const_value"] = "%s" % (('{0:0%sb}' % (signal["size"])).format(int(comparison[1])).replace("-",""))
+							signals.append(deepcopy(signal))
+
+				comparator = {}
+				comparator["in1"] = "reg_" + comparison[0]
+				comparator["in2"] = "const_%s_%s" % (str(int(comparison[1])).replace(".","_"), str(comparison[2]))
+				comparator["out"] = "comp_%s" % (filteredComparison)
+				comparators.append(deepcopy(comparator))
+
+	###################################################
+
+	exprs = []
+
+	if classifier == 'forest':
+		sizeBitsAdd = int(ceil(log(numTrees+1,2)))
+		nrCatBits = sizeBitsAdd - 1
+		for _out in range(nrOut):
+			signal = {}
+			signal['name'] = 'add_%d' % (_out)
+			signal['size'] = sizeBitsAdd
+			signal['type'] = 'STD_LOGIC_VECTOR' if sizeBitsAdd > 1 else 'STD_LOGIC'
+			signals.append(deepcopy(signal))
+
+		for _out in range(nrOut):
+			expr = {}
+			expr['out'] = 'add_%d' % (_out)
+			expr['op'] = '+'
+			if nrCatBits > 1:
+				expr['ops'] = ["{%d'b%s, or_%d}" % (nrCatBits, '0'*nrCatBits, x) for x in range(_out, nrOut*numTrees, nrOut)]
+			else:
+				expr['ops'] = ["{1'b0, or_%d}" % (x) for x in range(_out, nrOut*numTrees, nrOut)]
+			exprs.append(deepcopy(expr))
+			
+		comps = []
+		cmprsnsGlobal = []
+		highestsGlobal = []
+		groupings = 2
+		l = ["add_%d" % (x) for x in range(nrOut)]
+		cmprsns = [l[i:i+groupings] for i in range(0, len(l), groupings)]
+		while len(cmprsns) > 1:
+			nextCmprsns = []
+			for elem in cmprsns:
+				concatNrs = "_".join(["_".join(x.split("_")[1:]) for x in elem])
+				if len(elem) < 2:
+					nextCmprsns.append("add_%s" % (concatNrs))
+					continue
+				comp = {}
+				comp['elems'] = elem
+
+				highestsGlobal.append('add_%s' % (concatNrs))
+				cmprsnsGlobal.append('comp_add_%s' % (concatNrs))
+				idxs = []
+	
+				nextCmprsns.append("add_%s" % (concatNrs))
+				comps.append(deepcopy(comp))
+	
+			cmprsns = [nextCmprsns[i:i+groupings] for i in range(0,len(nextCmprsns),groupings)]
+	
+		comp = {}
+		comp['elems'] = cmprsns[0]
+		comps.append(deepcopy(comp))
+		cmprsnsGlobal.append('comp_add_%s' % ("_".join(["_".join(x.split("_")[1:]) for x in cmprsns[0]])))
+
+		for cmprsn in cmprsnsGlobal:
+			signal = {}
+			signal['name'] = cmprsn
+			signal['size'] = 1
+			signal['type'] = 'STD_LOGIC'
+			signals.append(deepcopy(signal))
+		for highest in highestsGlobal:
+			signal = {}
+			signal['name'] = highest
+			signal['size'] = sizeBitsAdd
+			signal['type'] = 'STD_LOGIC_VECTOR' if sizeBitsAdd > 1 else 'STD_LOGIC'
+			signals.append(deepcopy(signal))
+
+		signal = {}
+		signal['name'] = "_".join(cmprsnsGlobal[-1].split("_")[1:])
+		signal['size'] = sizeBitsAdd
+		signal['type'] = 'STD_LOGIC_VECTOR'
+		signals.append(deepcopy(signal))
+
+	##### GET REGISTERS #####
+
+	registers = []
+
+	for _input in inputs:
+		if _input["name"] == "CLK" or _input["name"] == "RST":
+			continue
+		register = {}
+		register["input"] = _input["name"]
+		register["output"] = "reg_%s" % (_input["name"])
+		register["size"] = _input["size"]
+		registers.append(deepcopy(register))
+
+	register = {}
+	register["input"] = "reg_%s" % (outputs[0]["name"])
+	register["output"] = outputs[0]["name"]
+	register["size"] = outputs[0]["size"]
+
+	registers.append(deepcopy(register))
+
+	muxSels = []
+
+	if classifier == 'forest':
+		for _out in range(nrOut):
+			elemsContainOut = []
+			for elem in cmprsnsGlobal:
+				if str(_out) in elem.split("_")[2:]:
+					elemsContainOut.append(elem)
+			expr = {}
+			expr['out'] = "sel_decision_%d" % (_out)
+			expr['op'] = '&'
+			expr['ops'] = elemsContainOut
+	
+			signal = {}
+			signal['name'] = "sel_decision_%d" % (_out)
+			signal['size'] = len(elemsContainOut)
+			signal['type'] = 'STD_LOGIC_VECTOR' if len(elemsContainOut) > 1 else "STD_LOGIC"
+			signals.append(deepcopy(signal))
+
+			muxSel = {}
+			muxSel['selector'] = "sel_decision_%d" % (_out)
+			muxSel['output'] = 'reg_decision(%d)' % (_out)
+			seqDecider = ""
+			for code in elemsContainOut:
+				for comp in comps:
+					cats = "comp_add_" + "_".join(comp['elems'][0].split("_")[1:] + comp['elems'][1].split("_")[1:])
+					add0 = comp['elems'][0].split("_")[1:]
+					add1 = comp['elems'][1].split("_")[1:]
+					if code == cats:
+						if str(_out) in add0:
+							seqDecider += "1"
+						else:
+							seqDecider += "0"
+			muxSel['decider'] = seqDecider
+
+
+			exprs.append(deepcopy(expr))
+			muxSels.append(deepcopy(muxSel))
+
+	#########################
+
+	##### GET 'AND' AND 'OR' SIGNALS (EXPRESSIONS) #####
+
+	lastIdx = 0
+	for i in range(numTrees):
+		for specOut in range(nrOut):
+			for idx, or_ in enumerate(strExprs[i][specOut].split("|")):
+				if or_ == "0":
+					signal = {}
+					expr = {}
+					expr["out"] = "and_%d" % (idx + lastIdx)
+					expr["op"] = "and"
+					expr["ops"] = ["'0'", "'0'"]
+
+					exprs.append(deepcopy(expr))
+
+					signal["name"] = "and_%d" % (idx + lastIdx)
+					signal["size"] = 1
+					signal["type"] = "STD_LOGIC"
+					signals.append(deepcopy(signal))
+
+					continue
+
+
+				signal = {}
+				expr = {}
+				expr["out"] = "and_%d" % (idx + lastIdx)
+				expr["op"] = "and"
+				expr["ops"] = []
+
+				for idComp, comparison in enumerate(globalComparisons):
+					filteredComparison = "_".join([comparison[0], str(int(comparison[1])).replace(".","_")])
+					if "c%d" % (idComp) in or_.strip("(").strip(")").split("&"):
+						expr["ops"].append(deepcopy("comp_%s" % (filteredComparison)))
+					elif "~c%d" % (idComp) in or_.strip("(").strip(")").split("&"):
+						expr["ops"].append(deepcopy("not(comp_%s)" % (filteredComparison)))
+
+				######## FIX BUG WHERE AND_X <=  ; ########
+				if expr["ops"] == []:
+					expr["ops"] = ["'1'", "'1'"]
+				###########################################
+
+				exprs.append(deepcopy(expr))
+
+				signal["name"] = "and_%d" % (idx + lastIdx)
+				signal["size"] = 1
+				signal["type"] = "STD_LOGIC"
+				signals.append(deepcopy(signal))
+
+			signal = {}
+			signal["name"] = "or_%d" % (specOut + i * nrOut)
+			signal["size"] = 1
+			signal["type"] = "STD_LOGIC"
+			signals.append(deepcopy(signal))
+
+			expr["out"] = "or_%d" % (specOut + i * nrOut)
+			expr["op"] = "or"
+			expr["ops"] = []
+
+			expr["ops"] = ["and_%d" % (x + lastIdx) for x in range(len(strExprs[i][specOut].split("|")))]
+
+			exprs.append(deepcopy(expr))
+
+			lastIdx = lastIdx + idx + 1
+
+	##### GEN MAJORITARY GATE FOR ALL THE ORS #####
+
+	maj = {}
+	maj['inputs'] = [0]*nrOut
+	maj['outputs'] = ['reg_decision(%d)' % (x) for x in range(nrOut)]
+	for i in range(nrOut):
+		maj['inputs'][i] = []
+		for j in range(numTrees):
+			maj['inputs'][i].append('or_%d' % (i+j*nrOut))
+
+	###############################################
+
+	if numTrees == 1:
+		comps = []
+		maj = []
+		muxSels = []
+
+	maj = []
+
+	verilogSep.gen_architecture(fHandler, classifier, nameEntity, inputs, signals, registers, comparators, exprs, maj, nrOut, comps, muxSels)
+
+	####################################
+
+	return inputs, outputs
+
+
 def orderCodeFeats(tree, features):
 	tree_ = tree.tree_
 	featureName = [features[i] if i != _tree.TREE_UNDEFINED else "undefined!" for i in tree_.feature]
