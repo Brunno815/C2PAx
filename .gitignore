@@ -17,6 +17,7 @@ OUTPUT_DATASETS/
 testing.csv
 predict*.txt
 GEN_RESULTS*/
+RESULTS*/
 datasets/*.txt
 datasets/*_*
 train_data_full.py
