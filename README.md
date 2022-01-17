@@ -64,5 +64,6 @@ The RTL files are made available in the `RESULTS/` folder, inside the `HDL_trees
 
 ## References
 
-<font size="3"> [1] B.Abreu,M.Grellert,andS.Bampi,“Aframeworkfordesigningpower-efficientinferenceacceleratorsintree-based   learning   applications,”Engineering  Applications  of  ArtificialIntelligence,    vol.    109,    p.    104638,    2022.    [Online].    Available:https://www.sciencedirect.com/science/article/pii/S0952197621004462</font>
-<font size="3"> [2] S.  Salamat,  M.  Ahmadi,  B.  Alizadeh,  and  M.  Fujita,  “Systematicapproximate logic optimization using Don’t Care conditions,” in201718th International Symposium on Quality Electronic Design (ISQED),2017, pp. 419–425.</font>
+[1] B.Abreu, M.Grellert, and S. Bampi, “A framework for designing power-efficient inference accelerators in tree-based learning applications,” Engineering Applications of Artificial Intelligence, vol. 109, p. 104638, 2022. [Online]. Available: https://www.sciencedirect.com/science/article/pii/S0952197621004462
+
+[2] S. Salamat, M. Ahmadi, B. Alizadeh, and M. Fujita, “Systematic approximate logic optimization using Don’t Care conditions,” in 2017 18th International Symposium on Quality Electronic Design (ISQED), 2017, pp. 419–425.
