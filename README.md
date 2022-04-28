@@ -2,15 +2,15 @@
 
 ## Project Description
 
-This repository contains **C2PAx**, a technique to approximate constant comparators based on previous standalone synthesis of comparators for every possible constant value, focusing on VLSI implementations of tree-based models.
+This repository contains **C2PAx**, a technique to approximate constant comparators based on previous standalone synthesis of comparators for every possible constant value, focusing on VLSI implementations of tree-based models. More details on the method are provided in [1].
 
 This proposal was implemented considering Decision Trees (DTs) and Random Forests (RFs) ML models, to verify the impacts of the proposal. It can be applied to any other ML model that uses constant comparators (XGBoost, for instance), or any other accelerator that uses comparators with explicit constants.
 
-First, the software generates RTL descriptions of the DT/RF to be approximated, using a tree-to-Verilog translator, which uses the Scikit-Learn (SK) tree structures as input. This translator was first proposed in [1]. The descriptions are generated with constant comparators, and all the comparators of the tree model are instantiated in the RTL.
+First, the software generates RTL descriptions of the DT/RF to be approximated, using a tree-to-Verilog translator, which uses the Scikit-Learn (SK) tree structures as input. This translator was first proposed in [2]. The descriptions are generated with constant comparators, and all the comparators of the tree model are instantiated in the RTL.
 
 The baseline RTL descriptions are approximated using our C2PAx proposal. The idea is that tree-based models contain several comparators, which can be described with explicit constants in one of their operators (these constants are defined in the training stage). The synthesis tool implements a specific circuit for each constant being compared. By synthesizing comparisons with every possible constant (for example, in a 10-bit comparison, there are 1024 possible values for the constant in the other input), we can have a list of pre-synthesized comparators with area results associated to each constant. Then, whenever we train a DT/RF model to generate a RTL description, we can adjust the constants of its comparisons so that we reduce the area (and energy) of the comparators, based on the pre-synthesized list of standalone comparators. This adjustment is performed based on an approximation range m, which denotes how far from the original constant the algorithm can look for another constant with a smaller associated area.
 
-We also implement another method for approximation denoted as DC [2], which applies Don't Care signals to the Least Significant Bits (LSBs) of the comparators, so that we can compare our results with a baseline model.
+We also implement another method for approximation denoted as DC [3], which applies Don't Care signals to the Least Significant Bits (LSBs) of the comparators, so that we can compare our results with a baseline model.
 
 There RTL files can then be synthesized and simulated to obtain power, area, timing, and accuracy results.
 
@@ -29,7 +29,7 @@ This project is structured as follows:
 
 * `presets.py` - Contains all the preset and configuration variables, such as the data sets to be used, the DT/RF configurations (tree depth, number of trees), the quantization level (this implementation considers 10-bit quantization), as well as the list of values for the approximation range `m` (`mList`) and the number of bits to be assigned DC values (`nrsBitsDC`). The chosen technique can be defined in the approxTechniques list. Other configuration presets can be defined here regarding the use of synthesis, the period, etc.
 
-* `preprocessing.py` - Applies the quantization to the data. In this work, only 10-bit quantization is applied, due to results obtained in [1]. Other widths can be applied, as long as the comparators for that specific width are pre-synthesized and available to be used by C2PAx (and moved to the `presynthesized_comps/` directory).
+* `preprocessing.py` - Applies the quantization to the data. In this work, only 10-bit quantization is applied, due to results obtained in [2]. Other widths can be applied, as long as the comparators for that specific width are pre-synthesized and available to be used by C2PAx (and moved to the `presynthesized_comps/` directory).
 
 * `train_translate.py` - Contains most utilities to train the SK structures and translate them to HDL descriptions (or to PDF files for visualization purposes). The `trainTestClf` method generates the SK structure and returns it, along with the accuracy of the baseline model (the accuracy of the approximate models can only be obtained through synthesis of the RTL files, as there are no equivalent associated SK structure). The `treeToHdl` method is the core of the translation to HDL, and it generates the lists and dictionaries to be used by the `gen_verilog.py` file in the mapping process. The `treeToHdl` method is the one that applies the C2PAx or DC method which are then mapped to Verilog.
 
@@ -64,6 +64,8 @@ The RTL files are made available in the `RESULTS/` folder, inside the `HDL_trees
 
 ## References
 
-[1] B.Abreu, M.Grellert, and S. Bampi, “A framework for designing power-efficient inference accelerators in tree-based learning applications,” Engineering Applications of Artificial Intelligence, vol. 109, p. 104638, 2022. [Online]. Available: https://www.sciencedirect.com/science/article/pii/S0952197621004462
+[1] B. Abreu, G. Paim, M. Grellert, and S. Bampi, "C2PAx: Complexity-Aware Constant Parameter Approximation for Energy-Efficient Tree-Based Machine Learning Accelerators," in IEEE Transactions on Circuits and Systems - I (TCAS-I): Regular Papers. Available: https://ieeexplore.ieee.org/document/9763871
 
-[2] S. Salamat, M. Ahmadi, B. Alizadeh, and M. Fujita, “Systematic approximate logic optimization using Don’t Care conditions,” in 2017 18th International Symposium on Quality Electronic Design (ISQED), 2017, pp. 419–425.
+[2] B. Abreu, M. Grellert, and S. Bampi, “A framework for designing power-efficient inference accelerators in tree-based learning applications,” Engineering Applications of Artificial Intelligence, vol. 109, p. 104638, 2022. [Online]. Available: https://www.sciencedirect.com/science/article/pii/S0952197621004462
+
+[3] S. Salamat, M. Ahmadi, B. Alizadeh, and M. Fujita, “Systematic approximate logic optimization using Don’t Care conditions,” in 2017 18th International Symposium on Quality Electronic Design (ISQED), 2017, pp. 419–425.
